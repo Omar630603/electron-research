@@ -1,11 +1,101 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Web App</title>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Steam Control</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 600px;
+            margin: 20px auto;
+            padding: 20px;
+        }
+        #messageList {
+            height: 300px;
+            overflow-y: auto;
+            border: 1px solid #ddd;
+            padding: 10px;
+            margin: 10px 0;
+            border-radius: 4px;
+        }
+        #messageList li {
+            margin-bottom: 5px;
+        }
+        button {
+            padding: 8px 16px;
+            margin: 5px;
+            border: none;
+            border-radius: 4px;
+            background: #4CAF50;
+            color: white;
+            cursor: pointer;
+        }
+        button:hover {
+            opacity: 0.9;
+        }
+        #jsonInput {
+            width: 100%;
+            padding: 8px;
+            margin: 5px 0;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            box-sizing: border-box;
+        }
+        .error {
+            background: #ffebee;
+        }
+    </style>
 </head>
 <body>
-  
+    <button onclick="sendPreset('open')">Open Steam</button>
+    <button onclick="sendPreset('close')">Close Steam</button>
+    <div>
+        <input type="text" id="jsonInput" placeholder="Enter JSON message">
+        <button onclick="sendCustomMessage()">Send</button>
+    </div>
+    <ul id="messageList"></ul>
+
+    <script>
+        function addLogEntry(message) {
+            const li = document.createElement('li');
+            li.textContent = `${new Date().toISOString()} - ${message}`;
+            document.getElementById('messageList').insertBefore(li, document.getElementById('messageList').firstChild);
+        }
+
+        async function sendMessage(message) {
+            try {
+                const response = await fetch('http://localhost:2000/api/command', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify(message)
+                });
+                
+                const data = await response.json();
+                addLogEntry(`Response: ${data.status} - ${data.message}`);
+            } catch (err) {
+                addLogEntry(`Error: Failed to send command - ${err.message}`);
+            }
+        }
+
+        function sendPreset(action) {
+            sendMessage({ action, app: 'steam' });
+        }
+
+        function sendCustomMessage() {
+            const input = document.getElementById('jsonInput');
+            try {
+                const message = JSON.parse(input.value);
+                sendMessage(message);
+                input.classList.remove('error');
+                input.value = '';
+            } catch {
+                input.classList.add('error');
+                addLogEntry('Error: Invalid JSON format');
+            }
+        }
+    </script>
 </body>
 </html>

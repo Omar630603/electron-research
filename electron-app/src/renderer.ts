@@ -28,6 +28,39 @@
 
 import './index.css';
 
-console.log(
-  '👋 This message is being logged by "renderer.ts", included via Vite',
-);
+declare global {
+  interface Window {
+    electron: {
+      onServerStatus: (callback: (status: string) => void) => void;
+      onServerMessage: (callback: (message: string) => void) => void;
+      onServerResponse: (callback: (response: { status: string; message: string }) => void) => void;
+    };
+  }
+}
+
+const statusElement = document.createElement('div');
+statusElement.id = 'status';
+document.body.appendChild(statusElement);
+
+const logElement = document.createElement('div');
+logElement.id = 'log';
+document.body.appendChild(logElement);
+
+function addLogEntry(message: string) {
+  const entry = document.createElement('div');
+  entry.textContent = `${new Date().toISOString()} - ${message}`;
+  logElement.insertBefore(entry, logElement.firstChild);
+}
+
+window.electron.onServerStatus((status) => {
+  statusElement.textContent = `Status: ${status}`;
+  addLogEntry(status);
+});
+
+window.electron.onServerMessage((message) => {
+  addLogEntry(message);
+});
+
+window.electron.onServerResponse((response) => {
+  addLogEntry(`Response: ${response.status} - ${response.message}`);
+});

@@ -1,19 +1,77 @@
 import { app, BrowserWindow } from 'electron';
 import path from 'node:path';
+import express from 'express';
+import cors from 'cors';
+import { spawn, exec } from 'node:child_process';
 import started from 'electron-squirrel-startup';
 
-// Handle creating/removing shortcuts on Windows when installing/uninstalling.
+type CommandRequest = {
+  action: 'open' | 'close';
+  app: string;
+}
+
+type CommandResponse = {
+  status: 'success' | 'error';
+  message: string;
+}
+
+let mainWindow: BrowserWindow;
+
 if (started) {
   app.quit();
 }
 
+function startExpressServer() {
+  const server = express();
+  server.use(cors());
+  server.use(express.json());
+
+  server.post('/api/command', (req, res) => {
+    const command: CommandRequest = req.body;
+    mainWindow.webContents.send('serverMessage', `Received command: ${command.action} ${command.app}`);
+
+    if (command.app !== 'steam') {
+      const response: CommandResponse = { status: 'error', message: 'Unsupported application' };
+      mainWindow.webContents.send('serverResponse', response);
+      res.json(response);
+      return;
+    }
+
+    if (command.action === 'open') {
+      try {
+        spawn('C:\\Program Files (x86)\\Steam\\steam.exe', [], { detached: true });
+        const response: CommandResponse = { status: 'success', message: 'Steam launched successfully' };
+        mainWindow.webContents.send('serverResponse', response);
+        res.json(response);
+      } catch (err) {
+        const response: CommandResponse = { status: 'error', message: 'Failed to launch Steam' };
+        mainWindow.webContents.send('serverResponse', response);
+        res.json(response);
+      }
+    } else if (command.action === 'close') {
+      exec('taskkill /F /IM steam.exe', (error) => {
+        const response: CommandResponse = error
+          ? { status: 'error', message: 'Failed to close Steam' }
+          : { status: 'success', message: 'Steam closed successfully' };
+        mainWindow.webContents.send('serverResponse', response);
+        res.json(response);
+      });
+    }
+  });
+
+  server.listen(2000, () => {
+    mainWindow.webContents.send('serverStatus', 'HTTP server listening on port 2000');
+  });
+}
+
 const createWindow = () => {
-  // Create the browser window.
-  const mainWindow = new BrowserWindow({
+  mainWindow = new BrowserWindow({
     width: 800,
     height: 600,
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
+      contextIsolation: true,
+      nodeIntegration: false,
     },
   });
 
@@ -25,19 +83,13 @@ const createWindow = () => {
       path.join(__dirname, `../renderer/${MAIN_WINDOW_VITE_NAME}/index.html`),
     );
   }
-
-  // Open the DevTools.
-  mainWindow.webContents.openDevTools();
 };
 
-// This method will be called when Electron has finished
-// initialization and is ready to create browser windows.
-// Some APIs can only be used after this event occurs.
-app.on('ready', createWindow);
+app.on('ready', () => {
+  createWindow();
+  startExpressServer();
+});
 
-// Quit when all windows are closed, except on macOS. There, it's common
-// for applications and their menu bar to stay active until the user quits
-// explicitly with Cmd + Q.
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') {
     app.quit();
