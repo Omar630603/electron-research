@@ -1,13 +1,13 @@
-import { app, BrowserWindow } from 'electron';
+import { app, BrowserWindow, ipcMain } from 'electron';
 import path from 'node:path';
-import express from 'express';
-import cors from 'cors';
 import { spawn, exec } from 'node:child_process';
+import { existsSync } from 'node:fs';
 import started from 'electron-squirrel-startup';
 
 type CommandRequest = {
-  action: 'open' | 'close';
-  app: string;
+  action: 'open_exe' | 'close_app';
+  path?: string;
+  name?: string;
 }
 
 type CommandResponse = {
@@ -15,79 +15,194 @@ type CommandResponse = {
   message: string;
 }
 
-let mainWindow: BrowserWindow;
+// Known application paths
+const knownApps: { [key: string]: string } = {
+  'steam.exe': 'C:\\Program Files (x86)\\Steam\\steam.exe',
+  'notepad.exe': 'C:\\Windows\\System32\\notepad.exe',
+  // Add more applications here as needed
+};
+
+let mainWindow: BrowserWindow | null = null;
 
 if (started) {
   app.quit();
 }
 
-function startExpressServer() {
-  const server = express();
-  server.use(cors());
-  server.use(express.json());
-
-  server.post('/api/command', (req, res) => {
-    const command: CommandRequest = req.body;
-    mainWindow.webContents.send('serverMessage', `Received command: ${command.action} ${command.app}`);
-
-    if (command.app !== 'steam') {
-      const response: CommandResponse = { status: 'error', message: 'Unsupported application' };
-      mainWindow.webContents.send('serverResponse', response);
-      res.json(response);
-      return;
-    }
-
-    if (command.action === 'open') {
-      try {
-        spawn('C:\\Program Files (x86)\\Steam\\steam.exe', [], { detached: true });
-        const response: CommandResponse = { status: 'success', message: 'Steam launched successfully' };
-        mainWindow.webContents.send('serverResponse', response);
-        res.json(response);
-      } catch (err) {
-        const response: CommandResponse = { status: 'error', message: 'Failed to launch Steam' };
-        mainWindow.webContents.send('serverResponse', response);
-        res.json(response);
-      }
-    } else if (command.action === 'close') {
-      exec('taskkill /F /IM steam.exe', (error) => {
-        const response: CommandResponse = error
-          ? { status: 'error', message: 'Failed to close Steam' }
-          : { status: 'success', message: 'Steam closed successfully' };
-        mainWindow.webContents.send('serverResponse', response);
-        res.json(response);
-      });
-    }
-  });
-
-  server.listen(2000, () => {
-    mainWindow.webContents.send('serverStatus', 'HTTP server listening on port 2000');
-  });
-}
-
 const createWindow = () => {
   mainWindow = new BrowserWindow({
-    width: 800,
-    height: 600,
+    width: 1000,
+    height: 800,
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
       nodeIntegration: false,
+      webSecurity: true,
+      webviewTag: false,
     },
   });
 
-  // and load the index.html of the app.
   if (MAIN_WINDOW_VITE_DEV_SERVER_URL) {
     mainWindow.loadURL(MAIN_WINDOW_VITE_DEV_SERVER_URL);
+    mainWindow.webContents.openDevTools();
   } else {
     mainWindow.loadFile(
       path.join(__dirname, `../renderer/${MAIN_WINDOW_VITE_NAME}/index.html`),
     );
   }
+
+  mainWindow.webContents.on('did-finish-load', () => {
+    if (mainWindow) {
+      mainWindow.webContents.send('appStatus', 'Application ready');
+    }
+  });
+
+  mainWindow.on('closed', () => {
+    mainWindow = null;
+  });
 };
+
+function sendResponse(response: CommandResponse) {
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send('commandResponse', response);
+  }
+}
+
+function logCommand(message: string) {
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send('commandReceived', message);
+  }
+}
+
+ipcMain.on('executeCommand', (event, command: CommandRequest) => {
+  if (!mainWindow) {
+    console.error('Main window is not available');
+    return;
+  }
+
+  logCommand(`Received command: ${command.action} ${command.path || command.name || ''}`);
+
+  if (command.action === 'open_exe') {
+    handleOpenExe(command);
+  } else if (command.action === 'close_app') {
+    handleCloseApp(command);
+  } else {
+    sendResponse({ 
+      status: 'error', 
+      message: `Unknown action: ${command.action}` 
+    });
+  }
+});
+
+function handleOpenExe(command: CommandRequest) {
+  let exePath = command.path;
+  
+  // If name is provided, look up the path from known apps
+  if (command.name && knownApps[command.name]) {
+    exePath = knownApps[command.name];
+  }
+  
+  if (!exePath) {
+    sendResponse({ 
+      status: 'error', 
+      message: 'No path provided or application not found in known apps' 
+    });
+    return;
+  }
+  console.log(exePath);
+  
+  // Check if file exists
+  if (!existsSync(exePath)) {
+    sendResponse({ 
+      status: 'error', 
+      message: `Application not found at path: ${exePath}` 
+    });
+    return;
+  }
+
+  try {
+    const child = spawn(exePath, [], { 
+      detached: true,
+      stdio: 'ignore',
+      shell: false
+    });
+
+    child.unref();
+
+    child.on('error', (err) => {
+      sendResponse({ 
+        status: 'error', 
+        message: `Failed to launch: ${exePath} - ${err.message}` 
+      });
+    });
+
+    // Give it a moment to check if spawn was successful
+    setTimeout(() => {
+      if (child.exitCode === null || child.exitCode === 0) {
+        sendResponse({ 
+          status: 'success', 
+          message: `Application launched: ${path.basename(exePath)}` 
+        });
+      }
+    }, 100);
+
+  } catch (err) {
+    sendResponse({ 
+      status: 'error', 
+      message: `Failed to launch: ${exePath} - ${err instanceof Error ? err.message : String(err)}` 
+    });
+  }
+}
+
+function handleCloseApp(command: CommandRequest) {
+  let processName = command.name;
+  
+  // If path is provided, extract the process name from it
+  if (command.path && !processName) {
+    processName = path.basename(command.path);
+  }
+  
+  if (!processName) {
+    sendResponse({ 
+      status: 'error', 
+      message: 'No process name or path provided' 
+    });
+    return;
+  }
+
+  // Ensure processName ends with .exe
+  if (!processName.toLowerCase().endsWith('.exe')) {
+    processName += '.exe';
+  }
+
+  // First check if process is running
+  exec(`tasklist /FI "IMAGENAME eq ${processName}" /NH`, (error, stdout, stderr) => {
+    if (error || !stdout.includes(processName)) {
+      sendResponse({ 
+        status: 'error', 
+        message: `Process not running: ${processName}` 
+      });
+      return;
+    }
+
+    // Process is running, now kill it
+    exec(`taskkill /F /IM "${processName}"`, (killError, killStdout, killStderr) => {
+      if (killError) {
+        sendResponse({ 
+          status: 'error', 
+          message: `Failed to close: ${processName} - ${killError.message}` 
+        });
+      } else {
+        sendResponse({ 
+          status: 'success', 
+          message: `Application closed: ${processName}` 
+        });
+      }
+    });
+  });
+}
 
 app.on('ready', () => {
   createWindow();
-  startExpressServer();
 });
 
 app.on('window-all-closed', () => {

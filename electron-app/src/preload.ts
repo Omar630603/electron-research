@@ -1,18 +1,27 @@
 import { contextBridge, ipcRenderer } from 'electron';
 
+type CommandRequest = {
+  action: 'open_exe' | 'close_app';
+  path?: string;
+  name?: string;
+}
+
 type CommandResponse = {
   status: 'success' | 'error';
   message: string;
 }
 
 contextBridge.exposeInMainWorld('electron', {
-  onServerStatus: (callback: (status: string) => void) => {
-    ipcRenderer.on('serverStatus', (_event, status) => callback(status));
+  executeCommand: (command: CommandRequest) => {
+    ipcRenderer.send('executeCommand', command);
   },
-  onServerMessage: (callback: (message: string) => void) => {
-    ipcRenderer.on('serverMessage', (_event, message) => callback(message));
+  onAppStatus: (callback: (status: string) => void) => {
+    ipcRenderer.on('appStatus', (_event, status) => callback(status));
   },
-  onServerResponse: (callback: (response: CommandResponse) => void) => {
-    ipcRenderer.on('serverResponse', (_event, response) => callback(response));
+  onCommandReceived: (callback: (message: string) => void) => {
+    ipcRenderer.on('commandReceived', (_event, message) => callback(message));
+  },
+  onCommandResponse: (callback: (response: CommandResponse) => void) => {
+    ipcRenderer.on('commandResponse', (_event, response) => callback(response));
   }
 });

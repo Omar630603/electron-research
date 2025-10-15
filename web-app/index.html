@@ -3,13 +3,22 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Steam Control</title>
+    <title>Application Control</title>
     <style>
         body {
             font-family: Arial, sans-serif;
             max-width: 600px;
             margin: 20px auto;
             padding: 20px;
+        }
+        h2 {
+            color: #333;
+        }
+        .status {
+            padding: 10px;
+            background: #e3f2fd;
+            border-radius: 4px;
+            margin-bottom: 15px;
         }
         #messageList {
             height: 300px;
@@ -18,9 +27,21 @@
             padding: 10px;
             margin: 10px 0;
             border-radius: 4px;
+            background: #fafafa;
         }
         #messageList li {
             margin-bottom: 5px;
+            padding: 5px;
+            border-left: 3px solid #4CAF50;
+            padding-left: 10px;
+        }
+        #messageList li.error {
+            border-left-color: #f44336;
+            background: #ffebee;
+        }
+        #messageList li.success {
+            border-left-color: #4CAF50;
+            background: #e8f5e9;
         }
         button {
             padding: 8px 16px;
@@ -30,9 +51,13 @@
             background: #4CAF50;
             color: white;
             cursor: pointer;
+            font-size: 14px;
         }
         button:hover {
             opacity: 0.9;
+        }
+        button.close {
+            background: #f44336;
         }
         #jsonInput {
             width: 100%;
@@ -41,61 +66,130 @@
             border: 1px solid #ddd;
             border-radius: 4px;
             box-sizing: border-box;
+            font-family: monospace;
         }
-        .error {
+        .input-error {
+            border-color: #f44336 !important;
             background: #ffebee;
+        }
+        .button-group {
+            margin: 10px 0;
+            padding: 10px;
+            background: #f5f5f5;
+            border-radius: 4px;
         }
     </style>
 </head>
 <body>
-    <button onclick="sendPreset('open')">Open Steam</button>
-    <button onclick="sendPreset('close')">Close Steam</button>
-    <div>
-        <input type="text" id="jsonInput" placeholder="Enter JSON message">
-        <button onclick="sendCustomMessage()">Send</button>
+    <h2>Application Control Panel</h2>
+    <div class="status" id="electronStatus">Waiting for Electron connection...</div>
+    
+    <div class="button-group">
+        <h3>Steam Controls</h3>
+        <button onclick="sendCommand({ action: 'open_exe', name: 'steam.exe' })">Open Steam</button>
+        <button class="close" onclick="sendCommand({ action: 'close_app', name: 'steam.exe' })">Close Steam</button>
     </div>
+    
+    <div class="button-group">
+        <h3>Custom Command</h3>
+        <input type="text" id="jsonInput" placeholder='{"action":"open_exe","path":"C:\\path\\to\\app.exe"}'>
+        <button onclick="sendCustomMessage()">Send Custom Command</button>
+    </div>
+    
+    <h3>Message Log</h3>
     <ul id="messageList"></ul>
 
     <script>
-        function addLogEntry(message) {
-            const li = document.createElement('li');
-            li.textContent = `${new Date().toISOString()} - ${message}`;
-            document.getElementById('messageList').insertBefore(li, document.getElementById('messageList').firstChild);
-        }
+        let isElectronReady = false;
 
-        async function sendMessage(message) {
-            try {
-                const response = await fetch('http://localhost:2000/api/command', {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json'
-                    },
-                    body: JSON.stringify(message)
-                });
-                
-                const data = await response.json();
-                addLogEntry(`Response: ${data.status} - ${data.message}`);
-            } catch (err) {
-                addLogEntry(`Error: Failed to send command - ${err.message}`);
+        function addLogEntry(message, type = 'info') {
+            const li = document.createElement('li');
+            li.textContent = `${new Date().toLocaleTimeString()} - ${message}`;
+            if (type === 'error') {
+                li.classList.add('error');
+            } else if (type === 'success') {
+                li.classList.add('success');
+            }
+            const messageList = document.getElementById('messageList');
+            messageList.insertBefore(li, messageList.firstChild);
+            
+            // Keep only last 50 messages
+            while (messageList.children.length > 50) {
+                messageList.removeChild(messageList.lastChild);
             }
         }
 
-        function sendPreset(action) {
-            sendMessage({ action, app: 'steam' });
+        function sendCommand(command) {
+            if (!isElectronReady) {
+                addLogEntry('Error: Electron is not ready yet', 'error');
+                return;
+            }
+            
+            window.parent.postMessage({ type: 'command', command }, '*');
+            addLogEntry(`Sent command: ${JSON.stringify(command)}`);
         }
 
         function sendCustomMessage() {
             const input = document.getElementById('jsonInput');
+            const value = input.value.trim();
+            
+            if (!value) {
+                input.classList.add('input-error');
+                addLogEntry('Error: Input is empty', 'error');
+                setTimeout(() => input.classList.remove('input-error'), 2000);
+                return;
+            }
+
             try {
-                const message = JSON.parse(input.value);
-                sendMessage(message);
-                input.classList.remove('error');
-                input.value = '';
-            } catch {
-                input.classList.add('error');
-                addLogEntry('Error: Invalid JSON format');
+                // Try parsing as JSON
+                const command = JSON.parse(value);
+                if ((command.action === 'open_exe' || command.action === 'close_app') && 
+                    (command.path || command.name)) {
+                    sendCommand(command);
+                    input.classList.remove('input-error');
+                    input.value = '';
+                } else {
+                    input.classList.add('input-error');
+                    addLogEntry('Error: Invalid command format. Must have "action" and either "path" or "name"', 'error');
+                    setTimeout(() => input.classList.remove('input-error'), 2000);
+                }
+            } catch (e) {
+                // If not JSON, treat as a path
+                if (value.includes('\\') || value.includes('/')) {
+                    sendCommand({ action: 'open_exe', path: value });
+                    input.classList.remove('input-error');
+                    input.value = '';
+                } else {
+                    input.classList.add('input-error');
+                    addLogEntry('Error: Invalid JSON or path format', 'error');
+                    setTimeout(() => input.classList.remove('input-error'), 2000);
+                }
             }
         }
+
+        // Listen for messages from Electron
+        window.addEventListener('message', (event) => {
+            // In production, verify event.origin for security
+            
+            if (event.data.type === 'electronReady') {
+                isElectronReady = true;
+                document.getElementById('electronStatus').textContent = 'Connected to Electron ✓';
+                document.getElementById('electronStatus').style.background = '#c8e6c9';
+                addLogEntry('Connected to Electron successfully', 'success');
+            } else if (event.data.type === 'commandResponse') {
+                const response = event.data.response;
+                addLogEntry(`Response: ${response.message}`, response.status === 'success' ? 'success' : 'error');
+            }
+        });
+
+        // Allow Enter key to send command
+        document.getElementById('jsonInput').addEventListener('keypress', (e) => {
+            if (e.key === 'Enter') {
+                sendCustomMessage();
+            }
+        });
+
+        addLogEntry('Web app loaded. Waiting for Electron connection...');
     </script>
 </body>
 </html>
