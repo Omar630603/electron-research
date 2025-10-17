@@ -78,6 +78,23 @@
             background: #f5f5f5;
             border-radius: 4px;
         }
+        .examples {
+            background: #fff3cd;
+            padding: 10px;
+            border-radius: 4px;
+            margin-bottom: 10px;
+            font-family: monospace;
+            font-size: 12px;
+        }
+        .examples div {
+            margin: 3px 0;
+        }
+        .note {
+            color: #666;
+            font-size: 11px;
+            margin-top: 5px;
+            font-style: italic;
+        }
     </style>
 </head>
 <body>
@@ -85,15 +102,29 @@
     <div class="status" id="electronStatus">Waiting for Electron connection...</div>
     
     <div class="button-group">
-        <h3>Steam Controls</h3>
+        <h3>Example Controls</h3>
         <button onclick="sendCommand({ action: 'open_exe', name: 'steam.exe' })">Open Steam</button>
-        <button class="close" onclick="sendCommand({ action: 'close_app', name: 'steam.exe' })">Close Steam</button>
+        <button class="close" onclick="sendCommand({ action: 'close_exe', name: 'steam.exe' })">Close Steam</button>
     </div>
     
     <div class="button-group">
         <h3>Custom Command</h3>
+        <div class="examples">
+            <div>{"action":"open_exe","name":"steam.exe"}</div>
+            <div>{"action":"open_exe","name":"notepad.exe"}</div>
+            <div>{"action":"open_exe","name":"chrome.exe"}</div>
+            <div>{"action":"open_exe","path":"C:\\Program Files\\MyApp\\app.exe"}</div>
+            <div class="note">You can change "open_exe" to "close_exe" to close that app if it is running</div>
+        </div>
         <input type="text" id="jsonInput" placeholder='{"action":"open_exe","path":"C:\\path\\to\\app.exe"}'>
         <button onclick="sendCustomMessage()">Send Custom Command</button>
+    </div>
+	
+    <div class="button-group" id="exeControls" style="display: none;">
+        <h3>Active App Controls</h3>
+        <button onclick="sendCommand({ action: 'exe_maximize' })">Maximize</button>
+        <button onclick="sendCommand({ action: 'exe_minimize' })">Minimize</button>
+        <button class="close" onclick="sendCommand({ action: 'exe_close' })">Close</button>
     </div>
     
     <h3>Message Log</h3>
@@ -101,6 +132,12 @@
 
     <script>
         let isElectronReady = false;
+        let isAppOpen = false;
+
+        function updateExeControlsVisibility() {
+            const controls = document.getElementById('exeControls');
+            controls.style.display = isAppOpen ? 'block' : 'none';
+        }
 
         function addLogEntry(message, type = 'info') {
             const li = document.createElement('li');
@@ -113,7 +150,6 @@
             const messageList = document.getElementById('messageList');
             messageList.insertBefore(li, messageList.firstChild);
             
-            // Keep only last 50 messages
             while (messageList.children.length > 50) {
                 messageList.removeChild(messageList.lastChild);
             }
@@ -141,20 +177,20 @@
             }
 
             try {
-                // Try parsing as JSON
                 const command = JSON.parse(value);
-                if ((command.action === 'open_exe' || command.action === 'close_app') && 
-                    (command.path || command.name)) {
+                const action = command.action;
+                const isLegacy = action === 'open_exe' || action === 'close_exe';
+                const isNew = action === 'exe_close' || action === 'exe_maximize' || action === 'exe_minimize';
+                if ((isLegacy && (command.path || command.name)) || isNew) {
                     sendCommand(command);
                     input.classList.remove('input-error');
                     input.value = '';
                 } else {
                     input.classList.add('input-error');
-                    addLogEntry('Error: Invalid command format. Must have "action" and either "path" or "name"', 'error');
+                    addLogEntry('Error: Invalid command. open_exe/close_exe require path or name. exe_* do not.', 'error');
                     setTimeout(() => input.classList.remove('input-error'), 2000);
                 }
             } catch (e) {
-                // If not JSON, treat as a path
                 if (value.includes('\\') || value.includes('/')) {
                     sendCommand({ action: 'open_exe', path: value });
                     input.classList.remove('input-error');
@@ -167,10 +203,7 @@
             }
         }
 
-        // Listen for messages from Electron
         window.addEventListener('message', (event) => {
-            // In production, verify event.origin for security
-            
             if (event.data.type === 'electronReady') {
                 isElectronReady = true;
                 document.getElementById('electronStatus').textContent = 'Connected to Electron ✓';
@@ -179,10 +212,18 @@
             } else if (event.data.type === 'commandResponse') {
                 const response = event.data.response;
                 addLogEntry(`Response: ${response.message}`, response.status === 'success' ? 'success' : 'error');
+                if (response.status === 'success') {
+                    if (response.message && response.message.startsWith('Application launched:')) {
+                        isAppOpen = true;
+                        updateExeControlsVisibility();
+                    } else if (response.message && (response.message.startsWith('Application closed:') || response.message.startsWith('Window closed:'))) {
+                        isAppOpen = false;
+                        updateExeControlsVisibility();
+                    }
+                }
             }
         });
 
-        // Allow Enter key to send command
         document.getElementById('jsonInput').addEventListener('keypress', (e) => {
             if (e.key === 'Enter') {
                 sendCustomMessage();

@@ -1,7 +1,7 @@
 import { contextBridge, ipcRenderer } from 'electron';
 
 type CommandRequest = {
-  action: 'open_exe' | 'close_app';
+  action: 'open_exe' | 'close_exe' | 'exe_close' | 'exe_maximize' | 'exe_minimize';
   path?: string;
   name?: string;
 }
